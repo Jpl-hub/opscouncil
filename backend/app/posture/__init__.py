@@ -1,0 +1,1 @@
+"""Live host posture collection."""

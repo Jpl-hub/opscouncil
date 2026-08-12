@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opscouncil.local/schema/capability-catalog-v3.json",
+  "title": "OpsCouncil capability catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalog_version", "capabilities"],
+  "properties": {
+    "catalog_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "min_version", "purpose"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,127}$"
+        },
+        "min_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 300
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "status",
+        "intent",
+        "name",
+        "description",
+        "tools",
+        "control_nodes",
+        "workflow",
+        "safety_gates",
+        "output_contract"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^skill\\.[a-z][a-z0-9_.-]{2,120}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "DRAFT", "INACTIVE"]
+        },
+        "intent": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,127}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 500
+        },
+        "tools": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "$ref": "#/$defs/tool" }
+        },
+        "control_nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "STATIC_REVIEW",
+              "PLAN_POLICY",
+              "INVESTIGATION",
+              "APPROVAL",
+              "EXECUTION",
+              "VERIFICATION",
+              "AUDIT"
+            ]
+          }
+        },
+        "workflow": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 300
+          }
+        },
+        "safety_gates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 400
+          }
+        },
+        "output_contract": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

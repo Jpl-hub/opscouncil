@@ -1,0 +1,21 @@
+[Unit]
+Description=OpsCouncil bounded failed-service fixture
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/false
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=16M
+TasksMax=8

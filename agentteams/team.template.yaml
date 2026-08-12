@@ -1,0 +1,19 @@
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: opscouncil-response
+spec:
+  description: Evidence-gated autonomous incident response with independent recovery verification
+  peerMentions: false
+  heartbeatEvery: 5m
+  workerMembers:
+    - name: incident-commander
+      role: team_leader
+    - name: signal-correlator
+      role: worker
+    - name: rca-investigator
+      role: worker
+    - name: remediation-planner
+      role: worker
+    - name: recovery-verifier
+      role: worker

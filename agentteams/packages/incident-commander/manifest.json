@@ -1,0 +1,15 @@
+{
+  "type": "worker",
+  "version": 1,
+  "source": {
+    "project": "OpsCouncil"
+  },
+  "worker": {
+    "suggested_name": "incident-commander",
+    "model": "qwen3.6-plus",
+    "runtime": "hermes",
+    "apt_packages": [],
+    "pip_packages": [],
+    "npm_packages": []
+  }
+}
