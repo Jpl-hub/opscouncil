@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy the OpsCouncil response team to AgentTeams v1.2 or newer."""
+"""Deploy the OpsCouncil response team to AgentTeams v1.2.2."""
 
 from __future__ import annotations
 
@@ -26,8 +26,12 @@ from agentteams.scripts.build_packages import (
 
 TEAM_NAME = "opscouncil-response"
 MANAGER_CONTAINER = "agentteams-manager"
+CONTROLLER_CONTAINER = "agentteams-controller"
+AGENTTEAMS_CLI = "agt"
 REMOTE_DIR = "/tmp/opscouncil-agentteams"
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+TEAM_READY_TIMEOUT_SECONDS = 180.0
+TEAM_MESSAGE_PLANE_TIMEOUT_SECONDS = 60.0
 
 
 class DeploymentError(RuntimeError):
@@ -86,9 +90,12 @@ def render_team_manifest() -> str:
 
 def _assert_manager_running(runtime: str) -> None:
     names = _run([runtime, "ps", "--format", "{{.Names}}"])
-    if MANAGER_CONTAINER not in names.splitlines():
-        raise DeploymentError(f"{MANAGER_CONTAINER} is not running")
-    _run([runtime, "exec", MANAGER_CONTAINER, "agt", "version"])
+    running = set(names.splitlines())
+    for container in (MANAGER_CONTAINER, CONTROLLER_CONTAINER):
+        if container not in running:
+            raise DeploymentError(f"{container} is not running")
+    _run([runtime, "exec", MANAGER_CONTAINER, AGENTTEAMS_CLI, "version"])
+    _run([runtime, "exec", CONTROLLER_CONTAINER, AGENTTEAMS_CLI, "version"])
 
 
 def _copy_packages(runtime: str) -> None:
@@ -100,7 +107,16 @@ def _copy_packages(runtime: str) -> None:
 
 def _resource_names(runtime: str, plural_kind: str) -> set[str]:
     raw = _run(
-        [runtime, "exec", MANAGER_CONTAINER, "agt", "get", plural_kind, "-o", "json"]
+        [
+            runtime,
+            "exec",
+            MANAGER_CONTAINER,
+            AGENTTEAMS_CLI,
+            "get",
+            plural_kind,
+            "-o",
+            "json",
+        ]
     )
     try:
         payload = json.loads(raw)
@@ -126,9 +142,29 @@ def _managed_resources(runtime: str) -> tuple[bool, list[str]]:
 def _delete_managed_resources(runtime: str, *, timeout_seconds: float = 90.0) -> None:
     team_exists, workers = _managed_resources(runtime)
     if team_exists:
-        _run([runtime, "exec", MANAGER_CONTAINER, "agt", "delete", "team", TEAM_NAME])
+        _run(
+            [
+                runtime,
+                "exec",
+                MANAGER_CONTAINER,
+                AGENTTEAMS_CLI,
+                "delete",
+                "team",
+                TEAM_NAME,
+            ]
+        )
     for agent_name in workers:
-        _run([runtime, "exec", MANAGER_CONTAINER, "agt", "delete", "worker", agent_name])
+        _run(
+            [
+                runtime,
+                "exec",
+                MANAGER_CONTAINER,
+                AGENTTEAMS_CLI,
+                "delete",
+                "worker",
+                agent_name,
+            ]
+        )
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -148,7 +184,7 @@ def _apply_worker_packages(runtime: str) -> dict[str, str]:
                 runtime,
                 "exec",
                 MANAGER_CONTAINER,
-                "agt",
+                AGENTTEAMS_CLI,
                 "apply",
                 "worker",
                 "--zip",
@@ -160,28 +196,169 @@ def _apply_worker_packages(runtime: str) -> dict[str, str]:
     return results
 
 
+def _worker_container_name(agent_name: str) -> str:
+    return f"agentteams-worker-{agent_name}"
+
+
+def _verify_team_room_members(runtime: str, *, room_id: str) -> dict[str, Any]:
+    """Require all declared Agent identities to be joined to the Team room."""
+
+    verify_script = """\
+import json
+import os
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+base = os.environ["AGENTTEAMS_MATRIX_URL"].rstrip("/")
+room_id = os.environ["OPSCOUNCIL_TEAM_ROOM_ID"]
+token = os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"]
+agent_names = json.loads(os.environ["OPSCOUNCIL_TEAM_AGENT_NAMES"])
+domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
+expected = {"@" + name + ":" + domain for name in agent_names}
+url = (
+    base
+    + "/_matrix/client/v3/rooms/"
+    + quote(room_id, safe="")
+    + "/joined_members"
+)
+request = Request(url, headers={"Authorization": "Bearer " + token})
+with urlopen(request, timeout=15) as response:
+    payload = json.load(response)
+joined = set((payload.get("joined") or {}).keys())
+missing = sorted(expected - joined)
+print(json.dumps({"joined_agents": sorted(expected & joined), "missing": missing}))
+if missing:
+    raise SystemExit("Team room is missing Agent identities: " + ", ".join(missing))
+"""
+    raw = _run(
+        [
+            runtime,
+            "exec",
+            "-e",
+            f"OPSCOUNCIL_TEAM_ROOM_ID={room_id}",
+            "-e",
+            "OPSCOUNCIL_TEAM_AGENT_NAMES=" + json.dumps(sorted(ROLE_BY_AGENT)),
+            _worker_container_name("incident-commander"),
+            "python3",
+            "-c",
+            verify_script,
+        ]
+    )
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DeploymentError("invalid Matrix Team membership response") from exc
+    if result.get("missing") or len(result.get("joined_agents") or []) != len(ROLE_BY_AGENT):
+        raise DeploymentError("AgentTeams Team room membership is incomplete")
+    return result
+
+
+def _ensure_team_message_plane(runtime: str, *, room_id: str) -> dict[str, Any]:
+    if not room_id:
+        raise DeploymentError("AgentTeams Team is Active but has no teamRoomID")
+    deadline = time.monotonic() + TEAM_MESSAGE_PLANE_TIMEOUT_SECONDS
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            return _verify_team_room_members(runtime, room_id=room_id)
+        except DeploymentError as exc:
+            last_error = str(exc)
+            time.sleep(1.0)
+    raise DeploymentError(
+        "timed out waiting for all Agent identities to join the Team room"
+        + (f": {last_error}" if last_error else "")
+    )
+
+
 def _apply_team(runtime: str, manifest: str) -> str:
     local_manifest = DIST_DIR / "team.yaml"
     local_manifest.write_text(manifest, encoding="utf-8")
     remote_manifest = f"{REMOTE_DIR}/team.yaml"
-    _run([runtime, "cp", str(local_manifest), f"{MANAGER_CONTAINER}:{remote_manifest}"])
-    apply_output = _run(
-        [runtime, "exec", MANAGER_CONTAINER, "agt", "apply", "-f", remote_manifest]
+    _run([runtime, "exec", CONTROLLER_CONTAINER, "mkdir", "-p", REMOTE_DIR])
+    _run(
+        [
+            runtime,
+            "cp",
+            str(local_manifest),
+            f"{CONTROLLER_CONTAINER}:{remote_manifest}",
+        ]
     )
-    status_output = _run(
+    create_script = f"""\
+token="$(cut -d, -f1 /data/agentteams-controller/pki/token.csv | head -1)"
+test -n "$token"
+api="https://127.0.0.1:6443/apis/agentteams.io/v1beta1/namespaces/default"
+ca="/data/agentteams-controller/pki/ca.crt"
+payload="{REMOTE_DIR}/team.json"
+response="{REMOTE_DIR}/team-response.json"
+yq -o=json '.' "{remote_manifest}" >"$payload"
+status="$(curl --silent --show-error --cacert "$ca" \\
+  -H "Authorization: Bearer $token" \\
+  -o /dev/null -w '%{{http_code}}' \\
+  "$api/teams/{TEAM_NAME}")"
+if [ "$status" != "404" ]; then
+  echo "team resource must not exist before create (HTTP $status)" >&2
+  exit 1
+fi
+curl --fail --silent --show-error --cacert "$ca" \\
+  -H "Authorization: Bearer $token" \\
+  -H 'Content-Type: application/json' \\
+  --data-binary "@$payload" \\
+  -o "$response" \\
+  "$api/teams"
+yq -r '"team/" + .metadata.name + " accepted by " + .apiVersion' "$response"
+"""
+    create_output = _run(
         [
             runtime,
             "exec",
-            MANAGER_CONTAINER,
-            "agt",
-            "get",
-            "teams",
-            TEAM_NAME,
-            "-o",
-            "json",
-        ]
+            "-i",
+            CONTROLLER_CONTAINER,
+            "sh",
+            "-seu",
+        ],
+        input_text=create_script,
     )
-    return "\n".join(item for item in (apply_output, status_output) if item)
+    deadline = time.monotonic() + TEAM_READY_TIMEOUT_SECONDS
+    last_status: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        raw = _run(
+            [
+                runtime,
+                "exec",
+                MANAGER_CONTAINER,
+                AGENTTEAMS_CLI,
+                "get",
+                "teams",
+                TEAM_NAME,
+                "-o",
+                "json",
+            ]
+        )
+        try:
+            last_status = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise DeploymentError("invalid AgentTeams Team status response") from exc
+        phase = str(last_status.get("phase") or "")
+        ready = int(last_status.get("readyWorkers") or 0)
+        total = int(last_status.get("totalWorkers") or 0)
+        if phase == "Active" and bool(last_status.get("leaderReady")) and ready == total:
+            membership = _ensure_team_message_plane(
+                runtime,
+                room_id=str(last_status.get("teamRoomID") or ""),
+            )
+            return "\n".join(
+                (create_output, raw, json.dumps(membership, ensure_ascii=False))
+            )
+        if phase == "Failed":
+            raise DeploymentError(
+                "AgentTeams Team reconciliation failed: "
+                + str(last_status.get("message") or "unknown error")
+            )
+        time.sleep(2.0)
+    raise DeploymentError(
+        "timed out waiting for AgentTeams Team to become ready: "
+        + json.dumps(last_status, ensure_ascii=False)
+    )
 
 
 def deploy(

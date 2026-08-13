@@ -60,7 +60,7 @@ class IncidentCollaborationServiceTest(unittest.TestCase):
         collaboration = self.service.get(self.collaboration.id)
         assert collaboration is not None
         self.assertEqual(collaboration.evidence_gate_status, "PASSED")
-        self.assertEqual(collaboration.autonomy_mode, "AUTO_REVERSIBLE")
+        self.assertEqual(collaboration.autonomy_mode, "HUMAN_GATED")
         self.assertIsNotNone(collaboration.action_contract_hash)
 
         self.service.record_execution(
@@ -230,6 +230,50 @@ class IncidentCollaborationServiceTest(unittest.TestCase):
                     "rollback_required": False,
                     "evidence_refs": ["execution:3001"],
                     "summary": "仅复述执行结果。",
+                },
+            )
+
+    def test_planner_cannot_change_an_accepted_dry_run_candidate(self) -> None:
+        self._submit_triage()
+        self._submit_investigation()
+        collaboration = self.service.get(self.collaboration.id)
+        assert collaboration is not None
+        context = dict(collaboration.shared_context_json)
+        context["action_candidates"] = [
+            {
+                "proposal_id": 17,
+                "tool_name": "safe_log_rotate",
+                "arguments": {"path": "/var/log/app.log", "dry_run": False},
+                "risk_level": "R2",
+            }
+        ]
+        collaboration.shared_context_json = context
+        self._claim("plan", "remediation_planner", "remediation-planner")
+
+        with self.assertRaisesRegex(CollaborationStateError, "downgrade"):
+            self.service.submit(
+                self.collaboration.id,
+                "plan",
+                role="remediation_planner",
+                agent_name="remediation-planner",
+                output={
+                    "action": {
+                        "proposal_id": 17,
+                        "tool_name": "safe_log_rotate",
+                        "arguments": {"path": "/var/log/app.log", "dry_run": False},
+                        "risk_level": "R1",
+                        "environment": "LAB",
+                        "target_scope": ["/var/log/app.log"],
+                        "preconditions": ["文件存在"],
+                        "postconditions": ["备份存在"],
+                        "rollback_steps": ["恢复备份"],
+                        "reversible": True,
+                        "canary": True,
+                        "policy_authorization_ref": "policy:lab-log-rotate:v1",
+                        "rationale": "轮转日志。",
+                    },
+                    "evidence_refs": ["proposal:17"],
+                    "alternatives_rejected": [],
                 },
             )
 

@@ -6,6 +6,8 @@ SERVICE_NAME="${OPSCOUNCIL_SERVICE_NAME:-opscouncil}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 WORKER_SERVICE_NAME="${OPSCOUNCIL_WORKER_SERVICE_NAME:-opscouncil-worker}"
 WORKER_SERVICE_FILE="/etc/systemd/system/${WORKER_SERVICE_NAME}.service"
+POLICY_CONTROLLER_SERVICE_NAME="${OPSCOUNCIL_POLICY_CONTROLLER_SERVICE_NAME:-opscouncil-policy-controller}"
+POLICY_CONTROLLER_SERVICE_FILE="/etc/systemd/system/${POLICY_CONTROLLER_SERVICE_NAME}.service"
 FEISHU_SERVICE_NAME="${OPSCOUNCIL_FEISHU_SERVICE_NAME:-opscouncil-feishu}"
 FEISHU_SERVICE_FILE="/etc/systemd/system/${FEISHU_SERVICE_NAME}.service"
 FEISHU_ENV_FILE="${OPSCOUNCIL_FEISHU_ENV_FILE:-/etc/opscouncil/feishu.env}"
@@ -27,8 +29,9 @@ HOST="${OPSCOUNCIL_HOST:-0.0.0.0}"
 PORT="${OPSCOUNCIL_PORT:-8000}"
 RUN_USER="${OPSCOUNCIL_SERVICE_USER:-$(id -un)}"
 
-if [ "$(id -u)" = "0" ]; then
-  echo "do not run this installer as root; run it as the restricted service user with sudo permission." >&2
+if [ "$RUN_USER" = "root" ] || [ "$RUN_USER" = "0" ]; then
+  echo "refusing to install services with a root runtime account." >&2
+  echo "set OPSCOUNCIL_SERVICE_USER to an existing restricted account." >&2
   exit 2
 fi
 
@@ -47,6 +50,9 @@ if [ ! -x "$ROOT_DIR/scripts/run.sh" ]; then
 fi
 if [ ! -x "$ROOT_DIR/scripts/worker.py" ]; then
   chmod +x "$ROOT_DIR/scripts/worker.py"
+fi
+if [ ! -x "$ROOT_DIR/scripts/policy_controller.py" ]; then
+  chmod +x "$ROOT_DIR/scripts/policy_controller.py"
 fi
 if [ ! -x "$ROOT_DIR/scripts/feishu_channel.py" ]; then
   chmod +x "$ROOT_DIR/scripts/feishu_channel.py"
@@ -68,9 +74,10 @@ fi
 
 api_unit="$(mktemp)"
 worker_unit="$(mktemp)"
+policy_controller_unit="$(mktemp)"
 feishu_unit="$(mktemp)"
 restart_polkit="$(mktemp)"
-trap 'rm -f "$api_unit" "$worker_unit" "$feishu_unit" "$restart_polkit"' EXIT
+trap 'rm -f "$api_unit" "$worker_unit" "$policy_controller_unit" "$feishu_unit" "$restart_polkit"' EXIT
 
 cat >"$api_unit" <<UNIT
 [Unit]
@@ -114,6 +121,32 @@ Environment=OPSCOUNCIL_EXECUTOR_USER=${RUN_USER}
 Environment="OPSCOUNCIL_RESTARTABLE_UNITS=${RESTARTABLE_UNITS_RAW}"
 Environment="OPSCOUNCIL_REPAIRABLE_CONFIG_PATHS=${REPAIRABLE_CONFIG_PATHS_RAW}"
 ExecStart=${VENV_DIR}/bin/python ${ROOT_DIR}/scripts/worker.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat >"$policy_controller_unit" <<UNIT
+[Unit]
+Description=OpsCouncil Deterministic Policy Controller
+After=network-online.target postgresql.service ${SERVICE_NAME}.service
+Wants=network-online.target ${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=${RUN_USER}
+WorkingDirectory=${ROOT_DIR}
+Environment=OPSCOUNCIL_ALLOW_ROOT_RUN=false
+Environment=OPSCOUNCIL_EXECUTOR_USER=${RUN_USER}
+Environment=OPSCOUNCIL_POLICY_CONTROLLER_ID=policy-controller
+Environment="OPSCOUNCIL_RESTARTABLE_UNITS=${RESTARTABLE_UNITS_RAW}"
+Environment="OPSCOUNCIL_REPAIRABLE_CONFIG_PATHS=${REPAIRABLE_CONFIG_PATHS_RAW}"
+ExecStart=${VENV_DIR}/bin/python ${ROOT_DIR}/scripts/policy_controller.py
 Restart=on-failure
 RestartSec=3
 UMask=0077
@@ -210,6 +243,7 @@ fi
 
 sudo install -m 0644 "$api_unit" "$SERVICE_FILE"
 sudo install -m 0644 "$worker_unit" "$WORKER_SERVICE_FILE"
+sudo install -m 0644 "$policy_controller_unit" "$POLICY_CONTROLLER_SERVICE_FILE"
 sudo install -m 0644 "$feishu_unit" "$FEISHU_SERVICE_FILE"
 sudo install -o root -g root -m 0755 "$ROOT_DIR/scripts/opscouncilctl.py" "$OPSCOUNCILCTL_PATH"
 if [ "$INSTALL_LAB_FIXTURES" = "true" ]; then
@@ -221,7 +255,7 @@ if [ "$INSTALL_LAB_FIXTURES" = "true" ]; then
   done
 fi
 sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME" "$WORKER_SERVICE_NAME"
+sudo systemctl enable "$SERVICE_NAME" "$WORKER_SERVICE_NAME" "$POLICY_CONTROLLER_SERVICE_NAME"
 sudo systemctl enable "$FEISHU_SERVICE_NAME"
 if [ "$INSTALL_LAB_FIXTURES" = "true" ]; then
   if sudo systemctl restart "$LAB_FIXTURE_SERVICE_NAME"; then
@@ -237,14 +271,16 @@ fi
 
 echo "Installed $SERVICE_FILE"
 echo "Installed $WORKER_SERVICE_FILE"
+echo "Installed $POLICY_CONTROLLER_SERVICE_FILE"
 echo "Installed $FEISHU_SERVICE_FILE"
 echo "Installed $OPSCOUNCILCTL_PATH"
 if [ "$INSTALL_LAB_FIXTURES" = "true" ]; then
   echo "Installed bounded lab fixture $LAB_FIXTURE_SERVICE_FILE"
   echo "Installed bounded service-impact relationship fixtures"
 fi
-echo "Start with: sudo systemctl start $SERVICE_NAME $WORKER_SERVICE_NAME"
+echo "Start with: sudo systemctl start $SERVICE_NAME $WORKER_SERVICE_NAME $POLICY_CONTROLLER_SERVICE_NAME"
 echo "Feishu starts when $FEISHU_ENV_FILE exists; install config/feishu.env.example there with mode 0600."
 echo "API logs: sudo journalctl -u $SERVICE_NAME -f"
 echo "Worker logs: sudo journalctl -u $WORKER_SERVICE_NAME -f"
+echo "Policy controller logs: sudo journalctl -u $POLICY_CONTROLLER_SERVICE_NAME -f"
 echo "Feishu logs: sudo journalctl -u $FEISHU_SERVICE_NAME -f"

@@ -20,7 +20,7 @@ class AgentIdentity:
         return payload
 
 
-TEAM_NAME = "operations-response"
+TEAM_NAME = "opscouncil-response"
 TEAM_VERSION = "1.0.0"
 
 IDENTITIES = (

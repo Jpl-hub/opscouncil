@@ -30,6 +30,18 @@ class InvestigationDepthTest(unittest.TestCase):
 
         self.assertEqual(decision.mode, "ITERATIVE_RCA")
 
+    def test_bounded_large_file_scan_uses_direct_evidence(self) -> None:
+        decision = select_investigation_depth(
+            "disk_pressure_analysis",
+            (
+                "定位 /tmp/opscouncil-lab/logs 中超过 10 MB 的日志；"
+                "核验路径与大小后生成可逆轮转方案"
+            ),
+        )
+
+        self.assertEqual(decision.mode, "DIRECT_EVIDENCE")
+        self.assertIn("确定性系统观测", decision.reason)
+
     def test_plain_disk_usage_query_uses_direct_evidence(self) -> None:
         decision = select_investigation_depth(
             "disk_pressure_analysis",

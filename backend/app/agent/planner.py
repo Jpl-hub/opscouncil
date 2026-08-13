@@ -7,6 +7,10 @@ from urllib.parse import urlsplit
 
 from backend.app.agent.health_contract import GENERAL_HEALTH_EVIDENCE_CONTRACT
 from backend.app.agent.intent import IntentDecision
+from backend.app.investigation.policy import (
+    requested_large_file_roots,
+    requested_large_file_threshold_mb,
+)
 
 
 @dataclass(frozen=True)
@@ -53,10 +57,29 @@ class Planner:
                     "检查文件虽已删除但仍被进程持有、空间未释放的情况。",
                 )
             )
+            roots = requested_large_file_roots(user_input)
+            threshold_mb = requested_large_file_threshold_mb(user_input)
+            if roots and threshold_mb is not None:
+                calls.append(
+                    PlannedToolCall(
+                        "find_large_files",
+                        {
+                            "roots": roots,
+                            "limit": 20,
+                            "min_size_mb": threshold_mb,
+                        },
+                        "按用户明确给出的目录和阈值定位文件占用，不扩展扫描范围。",
+                    )
+                )
             return Plan(
                 decision.intent,
                 calls,
-                "模型识别为磁盘空间分析，先采集容量并核对已删除未释放文件。",
+                (
+                    "模型识别为磁盘空间分析；控制器按明确目录和阈值采集文件证据，"
+                    "并核对已删除未释放文件。"
+                    if roots and threshold_mb is not None
+                    else "模型识别为磁盘空间分析，先采集容量并核对已删除未释放文件。"
+                ),
             )
 
         if decision.intent == "network_exposure_analysis":

@@ -36,6 +36,7 @@ class IncidentCreateRequest(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
     dedupe_key: str | None = Field(default=None, max_length=512)
     evidence_refs: list[str] = Field(default_factory=list, max_items=200)
+    task_id: int | None = Field(default=None, ge=1)
 
 
 class WorkClaimRequest(BaseModel):
@@ -81,15 +82,19 @@ def build_collaboration_router() -> APIRouter:
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         service = IncidentCollaborationService(session)
-        collaboration = service.create_incident(
-            host_key=payload.host_key,
-            signal_key=payload.signal_key,
-            severity=payload.severity,
-            title=payload.title,
-            summary=payload.summary,
-            dedupe_key=payload.dedupe_key,
-            initial_evidence_refs=payload.evidence_refs,
-        )
+        try:
+            collaboration = service.create_incident(
+                host_key=payload.host_key,
+                signal_key=payload.signal_key,
+                severity=payload.severity,
+                title=payload.title,
+                summary=payload.summary,
+                dedupe_key=payload.dedupe_key,
+                initial_evidence_refs=payload.evidence_refs,
+                task_id=payload.task_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         session.commit()
         return _detail(service, collaboration.id)
 
@@ -209,7 +214,7 @@ def build_collaboration_router() -> APIRouter:
         _require_agent_token(payload.agent_name, x_opscouncil_agent_token)
         service = IncidentCollaborationService(session)
         try:
-            service.submit(
+            result = service.submit(
                 collaboration_id,
                 work_key,
                 role=payload.role,
@@ -226,7 +231,15 @@ def build_collaboration_router() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         session.commit()
-        return _detail(service, collaboration_id)
+        notification = _dispatch_advanced_work(
+            service,
+            collaboration_id,
+            result.advanced_work_key,
+        )
+        response = _detail(service, collaboration_id)
+        if notification is not None:
+            response["agentteams_notification"] = notification
+        return response
 
     @router.post("/incidents/{collaboration_id}/execution")
     def record_execution(
@@ -246,6 +259,8 @@ def build_collaboration_router() -> APIRouter:
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CollaborationAuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except CollaborationStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
@@ -272,9 +287,37 @@ def _agentteams_client() -> AgentTeamsClient:
             matrix_url=settings.agentteams_matrix_url,
             username=settings.agentteams_username,
             password=settings.agentteams_password,
-            leader_room_id=settings.agentteams_leader_room_id,
+            team_room_id=settings.agentteams_team_room_id,
+            leader_user_id=settings.agentteams_leader_user_id,
         )
     )
+
+
+def _dispatch_advanced_work(
+    service: IncidentCollaborationService,
+    collaboration_id: int,
+    advanced_work_key: str | None,
+) -> dict[str, Any] | None:
+    if advanced_work_key is None or advanced_work_key == "execute":
+        return None
+    client = _agentteams_client()
+    if not client.connection.configured:
+        return {"status": "NOT_CONFIGURED", "work_key": advanced_work_key}
+    try:
+        event_id = client.dispatch_incident(_detail(service, collaboration_id))
+    except (AgentTeamsConfigurationError, AgentTeamsProtocolError) as exc:
+        return {
+            "status": "FAILED",
+            "work_key": advanced_work_key,
+            "reason": str(exc)[:500],
+        }
+    service.record_agentteams_dispatch(collaboration_id, event_id=event_id)
+    service.session.commit()
+    return {
+        "status": "SENT",
+        "work_key": advanced_work_key,
+        "event_id": event_id,
+    }
 
 
 def _require_agent_token(agent_name: str, received: str | None) -> None:

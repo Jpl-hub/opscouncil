@@ -37,7 +37,7 @@ cp .env.example .env
 chmod 0600 .env
 ```
 
-Set `DATABASE_URL` to the provisioned password and set the model credential. Keep `OPSCOUNCIL_ALLOW_ROOT_EXECUTOR=false`. Add only explicitly approved services to `OPSCOUNCIL_RESTARTABLE_UNITS` and only explicitly approved files to `OPSCOUNCIL_REPAIRABLE_CONFIG_PATHS`.
+Set `DATABASE_URL` to the provisioned password and set the model credential. Keep `OPSCOUNCIL_ALLOW_ROOT_EXECUTOR=false`. Add only explicitly approved services to `OPSCOUNCIL_RESTARTABLE_UNITS` and only explicitly approved files to `OPSCOUNCIL_REPAIRABLE_CONFIG_PATHS`. Leave `OPSCOUNCIL_AUTO_POLICY_REFS` empty until a versioned reversible-action policy has been reviewed and deployed; model-generated references are never trusted implicitly.
 
 ## 3. Validate and Migrate
 
@@ -52,11 +52,11 @@ Preflight verifies the kernel, architecture, runtime identity, host tools, Postg
 
 ```bash
 ./scripts/install_service.sh
-sudo systemctl start opscouncil opscouncil-worker
-sudo systemctl status opscouncil opscouncil-worker
+sudo systemctl start opscouncil opscouncil-worker opscouncil-policy-controller
+sudo systemctl status opscouncil opscouncil-worker opscouncil-policy-controller
 ```
 
-The installer creates separate API and worker services with a restrictive umask and `NoNewPrivileges`. If controlled service restart is configured, it writes a polkit rule containing only the approved units and rejects protected infrastructure services.
+The installer creates separate API, task worker, and deterministic policy-controller services with a restrictive umask and `NoNewPrivileges`. The policy controller is outside the model team: it verifies the sealed action hash, proposal binding, deployed policy reference, runtime scope, and independent pre/postconditions before the existing restricted executor can run. Expired execution leases are reconciled without replaying a side effect. If controlled service restart is configured, the installer writes a polkit rule containing only the approved units and rejects protected infrastructure services.
 
 Run the release checks:
 
@@ -82,7 +82,9 @@ Set the same random `OPSCOUNCIL_CHANNEL_INTERNAL_TOKEN` in `.env` and the Feishu
 
 ## 6. AgentTeams Response Team
 
-Install AgentTeams v1.2 or newer from its official release. Confirm that the `agentteams-manager` container and the `agt` CLI are healthy. The API URL below must be reachable from AgentTeams Worker containers.
+Install the pinned AgentTeams `v1.2.2` release. Confirm that the
+`agentteams-manager` container and its `agt` operator CLI are healthy. The API
+URL below must be reachable from AgentTeams Worker containers.
 
 ```bash
 export OPSCOUNCIL_API_URL=http://host.containers.internal:8000
@@ -93,11 +95,18 @@ python -m agentteams.scripts.deploy_team
 
 Generated Worker packages and policy-controller credentials are written under ignored `agentteams/dist/` with mode `0600` where applicable. Each Worker receives a derived role-specific token. The deployment fails when managed resources already exist; `--replace` explicitly deletes and recreates them to avoid stale seed-only package content.
 
+After deployment, set `AGENTTEAMS_TEAM_ROOM_ID` to the Team resource's
+`teamRoomID` and `AGENTTEAMS_LEADER_USER_ID` to the incident commander's full
+Matrix user ID. OpsCouncil dispatches into the shared Team room with a standard
+Matrix mention; dispatch readiness therefore requires both values rather than
+relying on an unaddressed room message.
+
 ## 7. Operations
 
 ```bash
 sudo journalctl -u opscouncil -f
 sudo journalctl -u opscouncil-worker -f
+sudo journalctl -u opscouncil-policy-controller -f
 sudo journalctl -u opscouncil-feishu -f
 opscouncilctl doctor --strict
 ```

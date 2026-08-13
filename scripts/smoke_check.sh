@@ -6,9 +6,11 @@ REQUIRE_SAFE_RUNTIME="${OPSCOUNCIL_REQUIRE_SAFE_RUNTIME:-true}"
 REQUIRE_MODEL="${OPSCOUNCIL_REQUIRE_MODEL:-false}"
 REQUIRE_DEPLOYMENT_READY="${OPSCOUNCIL_REQUIRE_DEPLOYMENT_READY:-false}"
 REQUIRE_WORKER="${OPSCOUNCIL_REQUIRE_WORKER:-false}"
+REQUIRE_POLICY_CONTROLLER="${OPSCOUNCIL_REQUIRE_POLICY_CONTROLLER:-false}"
 REQUIRE_FEISHU="${OPSCOUNCIL_REQUIRE_FEISHU:-auto}"
 REQUIRE_LAB_FIXTURES="${OPSCOUNCIL_REQUIRE_LAB_FIXTURES:-false}"
 WORKER_SERVICE_NAME="${OPSCOUNCIL_WORKER_SERVICE_NAME:-opscouncil-worker}"
+POLICY_CONTROLLER_SERVICE_NAME="${OPSCOUNCIL_POLICY_CONTROLLER_SERVICE_NAME:-opscouncil-policy-controller}"
 FEISHU_SERVICE_NAME="${OPSCOUNCIL_FEISHU_SERVICE_NAME:-opscouncil-feishu}"
 FEISHU_ENV_FILE="${OPSCOUNCIL_FEISHU_ENV_FILE:-/etc/opscouncil/feishu.env}"
 
@@ -134,6 +136,16 @@ if [ "$REQUIRE_WORKER" = "true" ]; then
   worker_status="active/$worker_runtime_status"
 fi
 
+policy_controller_status="not-required"
+if [ "$REQUIRE_POLICY_CONTROLLER" = "true" ]; then
+  need_cmd systemctl
+  if ! systemctl is-active --quiet "$POLICY_CONTROLLER_SERVICE_NAME"; then
+    echo "policy controller check failed: $POLICY_CONTROLLER_SERVICE_NAME is not active" >&2
+    exit 8
+  fi
+  policy_controller_status="active"
+fi
+
 feishu_required="false"
 if [ "$REQUIRE_FEISHU" = "true" ]; then
   feishu_required="true"
@@ -175,5 +187,6 @@ echo "- runtime: $runtime_status ($runtime_user/uid $runtime_uid)"
 echo "- deployment: $deployment_status (${deployment_os}/${deployment_machine})"
 echo "- model: $chat_model configured=$ai_configured"
 echo "- worker: $worker_status"
+echo "- policy controller: $policy_controller_status"
 echo "- Feishu: $feishu_status enabled=$feishu_enabled state=$feishu_instance_status"
 echo "- lab fixture: $lab_failed_service_status required=$REQUIRE_LAB_FIXTURES"

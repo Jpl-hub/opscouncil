@@ -20,6 +20,7 @@ package_entries=(
   "migrations"
   "requirements"
   "scripts/opscouncilctl.py"
+  "scripts/policy_controller.py"
   "scripts/feishu_channel.py"
   "scripts/install_service.sh"
   "scripts/migrate.sh"

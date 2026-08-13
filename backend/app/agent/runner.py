@@ -419,6 +419,40 @@ class AgentRunner:
         operator: str = "local-admin",
         comment: str | None = None,
     ) -> Task:
+        return self._authorize_and_execute_proposal(
+            proposal_id,
+            operator=operator,
+            comment=comment,
+            authorization_kind="HUMAN",
+        )
+
+    def execute_policy_authorized_proposal(
+        self,
+        proposal_id: int,
+        *,
+        controller_id: str,
+        policy_authorization_ref: str,
+    ) -> Task:
+        normalized_ref = policy_authorization_ref.strip()
+        if not normalized_ref:
+            raise ValueError("policy authorization reference is required")
+        return self._authorize_and_execute_proposal(
+            proposal_id,
+            operator=controller_id,
+            comment=f"确定性策略授权：{normalized_ref}",
+            authorization_kind="POLICY",
+        )
+
+    def _authorize_and_execute_proposal(
+        self,
+        proposal_id: int,
+        *,
+        operator: str,
+        comment: str | None,
+        authorization_kind: str,
+    ) -> Task:
+        if authorization_kind not in {"HUMAN", "POLICY"}:
+            raise ValueError("unsupported authorization kind")
         proposal = self.session.scalar(
             select(ActionProposal)
             .where(ActionProposal.id == proposal_id)
@@ -472,12 +506,25 @@ class AgentRunner:
         self.audit.append_event(
             task,
             TaskStatus.APPROVAL_REQUIRED.value,
-            "approval_recorded",
-            "管理员确认执行回滚。" if bound_tool_name == "restore_log_backup" else "管理员确认执行建议处置。",
+            (
+                "policy_authorization_recorded"
+                if authorization_kind == "POLICY"
+                else "approval_recorded"
+            ),
+            (
+                "确定性策略控制器确认动作满足预授权策略。"
+                if authorization_kind == "POLICY"
+                else (
+                    "管理员确认执行回滚。"
+                    if bound_tool_name == "restore_log_backup"
+                    else "管理员确认执行建议处置。"
+                )
+            ),
             {
                 "proposal_id": proposal.id,
                 "operator": operator,
                 "comment": comment,
+                "authorization_kind": authorization_kind,
                 "action_fingerprint": safety_case.action_fingerprint,
             },
         )

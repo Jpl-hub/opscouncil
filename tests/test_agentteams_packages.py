@@ -14,7 +14,14 @@ from agentteams.scripts.build_packages import (
     build_packages,
     derive_token,
 )
-from agentteams.scripts.deploy_team import DeploymentError, deploy, render_team_manifest
+from agentteams.scripts.deploy_team import (
+    DeploymentError,
+    _ensure_team_message_plane,
+    _verify_team_room_members,
+    deploy,
+    render_team_manifest,
+)
+from agentteams.scripts.deploy_team import CONTROLLER_CONTAINER, AGENTTEAMS_CLI
 
 
 class AgentTeamsPackageTest(unittest.TestCase):
@@ -96,6 +103,39 @@ class AgentTeamsPackageTest(unittest.TestCase):
             self.assertIn(f"name: {agent_name}", rendered)
         self.assertNotIn("__", rendered)
         self.assertNotIn("token", rendered.lower())
+
+    def test_deployer_uses_authenticated_v1beta1_team_resource(self) -> None:
+        from agentteams.scripts import deploy_team
+
+        source = Path(deploy_team.__file__).read_text(encoding="utf-8")
+        self.assertEqual(CONTROLLER_CONTAINER, "agentteams-controller")
+        self.assertEqual(AGENTTEAMS_CLI, "agt")
+        self.assertIn("apis/agentteams.io/v1beta1/namespaces/default", source)
+        self.assertIn("token.csv", source)
+        self.assertIn('phase == "Active"', source)
+        self.assertIn('ready == total', source)
+        self.assertIn("_ensure_team_message_plane", source)
+        self.assertIn("joined_members", source)
+
+    @patch("agentteams.scripts.deploy_team._run")
+    def test_verify_team_room_requires_every_declared_agent(self, run) -> None:
+        run.return_value = json.dumps(
+            {"joined_agents": sorted(ROLE_BY_AGENT), "missing": []}
+        )
+
+        result = _verify_team_room_members(
+            "docker", room_id="!team:matrix.test"
+        )
+
+        self.assertEqual(result["missing"], [])
+        args = run.call_args.args[0]
+        self.assertIn("agentteams-worker-incident-commander", args)
+
+    @patch("agentteams.scripts.deploy_team._verify_team_room_members")
+    def test_message_plane_rejects_missing_team_room_id(self, verify) -> None:
+        with self.assertRaisesRegex(DeploymentError, "teamRoomID"):
+            _ensure_team_message_plane("docker", room_id="")
+        verify.assert_not_called()
 
     @patch("agentteams.scripts.deploy_team._managed_resources")
     @patch("agentteams.scripts.deploy_team._assert_manager_running")

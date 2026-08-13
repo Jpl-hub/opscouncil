@@ -167,10 +167,10 @@ class InvestigationPolicy:
             "config_integrity_scan.paths": sorted(scope.paths)[:100],
             "filesystem_mount_context.path": sorted(scope.paths)[:100],
             "find_large_files.min_size_mb": [
-                _requested_large_file_threshold_mb(user_input) or 10
+                requested_large_file_threshold_mb(user_input) or 10
             ],
             "find_large_files.roots": [
-                *_requested_large_file_roots(user_input),
+                *requested_large_file_roots(user_input),
             ]
             or ["/var/log", "/tmp"],
         }
@@ -292,7 +292,7 @@ def _normalize_read_only_arguments(
     if tool_name != "find_large_files":
         return normalized
 
-    requested_roots = _requested_large_file_roots(user_input)
+    requested_roots = requested_large_file_roots(user_input)
     roots = normalized.get("roots")
     if not isinstance(roots, list):
         roots = []
@@ -306,7 +306,7 @@ def _normalize_read_only_arguments(
             merged_roots.append(normalized_root)
     normalized["roots"] = merged_roots[:8]
 
-    explicit_threshold = _requested_large_file_threshold_mb(user_input)
+    explicit_threshold = requested_large_file_threshold_mb(user_input)
     if explicit_threshold is not None:
         normalized["min_size_mb"] = explicit_threshold
         return normalized
@@ -317,7 +317,7 @@ def _normalize_read_only_arguments(
     return normalized
 
 
-def _requested_large_file_roots(user_input: str) -> list[str]:
+def requested_large_file_roots(user_input: str) -> list[str]:
     roots: list[str] = []
     for match in re.finditer(r"(?<![A-Za-z0-9_])(/[^\s，。；;]*)", user_input):
         raw_path = match.group(1).rstrip('"\'）)]}')
@@ -350,7 +350,7 @@ def _validate_large_file_roots(roots: Any) -> None:
             )
 
 
-def _requested_large_file_threshold_mb(user_input: str) -> int | None:
+def requested_large_file_threshold_mb(user_input: str) -> int | None:
     number_and_unit = r"(\d+(?:\.\d+)?)\s*(gib|gb|mib|mb)"
     patterns = (
         rf"(?:超过|大于|至少|不小于|不低于)\s*{number_and_unit}",

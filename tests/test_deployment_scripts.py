@@ -21,6 +21,9 @@ class DeploymentScriptTest(unittest.TestCase):
         for command in ("journalctl", "systemctl", "ss", "ps"):
             self.assertIn(command, script)
 
+        self.assertIn('node_major" -ge 20', script)
+        self.assertIn("serving the verified bundled frontend", script)
+
     def test_package_uses_an_explicit_runtime_allowlist(self) -> None:
         script = (ROOT / "scripts" / "package.sh").read_text(encoding="utf-8")
 
@@ -43,6 +46,7 @@ class DeploymentScriptTest(unittest.TestCase):
             "migrations",
             "requirements",
             "scripts/opscouncilctl.py",
+            "scripts/policy_controller.py",
             "scripts/feishu_channel.py",
             "scripts/install_service.sh",
             "scripts/migrate.sh",
@@ -102,7 +106,16 @@ class DeploymentScriptTest(unittest.TestCase):
         self.assertLess(migrate_at, worker_install_at)
         self.assertIn("opscouncil-worker", script)
         self.assertIn("scripts/worker.py", script)
+        self.assertIn("opscouncil-policy-controller", script)
+        self.assertIn("scripts/policy_controller.py", script)
         self.assertIn('sudo systemctl enable "$SERVICE_NAME" "$WORKER_SERVICE_NAME"', script)
+
+    def test_service_installer_rejects_a_root_runtime_account(self) -> None:
+        script = (ROOT / "scripts" / "install_service.sh").read_text(encoding="utf-8")
+
+        self.assertIn('if [ "$RUN_USER" = "root" ]', script)
+        self.assertIn("refusing to install services with a root runtime account", script)
+        self.assertNotIn('if [ "$(id -u)" = "0" ]', script)
 
     def test_service_installer_adds_isolated_optional_feishu_unit(self) -> None:
         script = (ROOT / "scripts" / "install_service.sh").read_text(encoding="utf-8")
@@ -186,6 +199,13 @@ class DeploymentScriptTest(unittest.TestCase):
         self.assertIn("worker service check failed", script)
         self.assertIn("/api/runtime/worker", script)
         self.assertIn("worker heartbeat check failed", script)
+
+    def test_smoke_check_can_require_policy_controller_service(self) -> None:
+        script = (ROOT / "scripts" / "smoke_check.sh").read_text(encoding="utf-8")
+
+        self.assertIn("OPSCOUNCIL_REQUIRE_POLICY_CONTROLLER", script)
+        self.assertIn("opscouncil-policy-controller", script)
+        self.assertIn("policy controller check failed", script)
 
     def test_smoke_check_can_require_bounded_lab_fixture(self) -> None:
         script = (ROOT / "scripts" / "smoke_check.sh").read_text(encoding="utf-8")

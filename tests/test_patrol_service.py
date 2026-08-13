@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend.app.collaboration.service import IncidentCollaborationService
 from backend.app.models.entities import (
+    ActionProposal,
     AgentWorkItem,
     AuditChain,
     CollaborationEvent,
@@ -39,6 +40,7 @@ TABLES = [
     TaskEvent.__table__,
     AuditChain.__table__,
     TaskJob.__table__,
+    ActionProposal.__table__,
     PatrolPolicy.__table__,
     PatrolRun.__table__,
     Incident.__table__,

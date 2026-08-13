@@ -15,14 +15,11 @@ _ALWAYS_ITERATIVE = frozenset(
 )
 _ALWAYS_DIRECT = frozenset({"config_integrity_analysis"})
 _DISK_INVESTIGATION_MARKERS = (
-    "定位",
-    "大文件",
-    "大日志",
-    "清理",
     "占满",
     "空间不足",
     "异常",
-    "处置",
+    "来源不明",
+    "持续增长",
 )
 _RCA_MARKERS = (
     "根因",

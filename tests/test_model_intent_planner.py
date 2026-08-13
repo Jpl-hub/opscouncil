@@ -146,6 +146,28 @@ class ModelIntentPlannerTest(unittest.TestCase):
             ],
         )
 
+    def test_disk_plan_honors_explicit_scan_scope_and_threshold(self) -> None:
+        decision = type(
+            "Decision",
+            (),
+            {"intent": "disk_pressure_analysis", "slots": {}},
+        )()
+
+        plan = Planner().create_plan(
+            decision,  # type: ignore[arg-type]
+            user_input="定位 /tmp/opscouncil-lab/logs 中超过 10 MB 的日志",
+        )
+
+        self.assertEqual(plan.tool_calls[-1].tool_name, "find_large_files")
+        self.assertEqual(
+            plan.tool_calls[-1].arguments,
+            {
+                "roots": ["/tmp/opscouncil-lab/logs"],
+                "limit": 20,
+                "min_size_mb": 10,
+            },
+        )
+
     def test_process_plan_leaves_handle_scan_for_evidence_driven_follow_up(self) -> None:
         decision = type(
             "Decision",

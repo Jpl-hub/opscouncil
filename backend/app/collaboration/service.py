@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 from typing import Any
 
@@ -13,11 +13,14 @@ from backend.app.audit.service import stable_hash
 from backend.app.collaboration.contracts import validate_output
 from backend.app.collaboration.manifest import AGENT_NAME_BY_ROLE, ROLE_BY_WORK_KEY, TEAM_NAME
 from backend.app.collaboration.workflow import WORKFLOW, WORK_BY_KEY, dependencies_satisfied
+from backend.app.core.config import settings
 from backend.app.models.entities import (
+    ActionProposal,
     AgentWorkItem,
     CollaborationEvent,
     Incident,
     IncidentCollaboration,
+    Task,
     utcnow,
 )
 
@@ -54,15 +57,24 @@ class IncidentCollaborationService:
         dedupe_key: str | None = None,
         initial_evidence_refs: list[str] | None = None,
         source: str = "operator",
+        task_id: int | None = None,
     ) -> IncidentCollaboration:
         normalized_severity = severity.strip().upper()
         if normalized_severity not in {"WARN", "CRITICAL"}:
             raise ValueError("severity must be WARN or CRITICAL")
+        if task_id is not None and self.session.get(Task, task_id) is None:
+            raise LookupError("task not found")
         if dedupe_key:
             existing = self.session.scalar(
                 select(Incident).where(Incident.dedupe_key == dedupe_key)
             )
             if existing is not None:
+                if task_id is not None and existing.task_id not in {None, task_id}:
+                    raise CollaborationStateError(
+                        "deduplicated incident is bound to another task"
+                    )
+                if task_id is not None and existing.task_id is None:
+                    existing.task_id = task_id
                 collaboration = self.get_by_incident(existing.id)
                 if collaboration is None:
                     return self.start(existing.id, initial_evidence_refs=initial_evidence_refs)
@@ -75,6 +87,7 @@ class IncidentCollaborationService:
             severity=normalized_severity,
             title=title.strip(),
             summary=summary.strip(),
+            task_id=task_id,
         )
         self.session.add(incident)
         self.session.flush()
@@ -100,6 +113,7 @@ class IncidentCollaborationService:
             return existing
 
         evidence_refs = _normalized_refs(initial_evidence_refs or [])
+        action_candidates = self._action_candidates(incident.task_id)
         collaboration = IncidentCollaboration(
             incident_id=incident.id,
             team_name=TEAM_NAME,
@@ -112,8 +126,16 @@ class IncidentCollaborationService:
                     "severity": incident.severity,
                     "title": incident.title,
                     "summary": incident.summary,
+                    "task_id": incident.task_id,
                 },
                 "initial_evidence_refs": evidence_refs,
+                "action_candidates": action_candidates,
+                "execution_policy": {
+                    "auto_authorization_refs": list(
+                        settings.collaboration_auto_policy_refs
+                    ),
+                    "unlisted_actions": "HUMAN_GATED",
+                },
                 "outputs": {},
             },
         )
@@ -149,6 +171,31 @@ class IncidentCollaborationService:
         incident.status = "INVESTIGATING"
         incident.updated_at = utcnow()
         return collaboration
+
+    def _action_candidates(self, task_id: int | None) -> list[dict[str, Any]]:
+        if task_id is None:
+            return []
+        proposals = list(
+            self.session.scalars(
+                select(ActionProposal)
+                .where(
+                    ActionProposal.task_id == task_id,
+                    ActionProposal.status == "PENDING_APPROVAL",
+                )
+                .order_by(ActionProposal.id.asc())
+            )
+        )
+        return [
+            {
+                "proposal_id": proposal.id,
+                "tool_name": proposal.tool_name,
+                "arguments": deepcopy(proposal.input_json),
+                "risk_level": proposal.risk_level,
+                "rationale": proposal.reason,
+                "dry_run": deepcopy(proposal.dry_run_result_json),
+            }
+            for proposal in proposals
+        ]
 
     def get(self, collaboration_id: int) -> IncidentCollaboration | None:
         return self.session.get(IncidentCollaboration, collaboration_id)
@@ -326,8 +373,14 @@ class IncidentCollaborationService:
         source_event_id: str | None = None,
     ) -> SubmissionResult:
         item = self._require_work_item(collaboration_id, "execute", for_update=True)
-        if item.status != "READY":
-            raise CollaborationStateError(f"execution work is {item.status}, not READY")
+        if item.status not in {"READY", "RUNNING"}:
+            raise CollaborationStateError(
+                f"execution work is {item.status}, not READY or RUNNING"
+            )
+        if item.status == "RUNNING" and item.assigned_agent != controller_id:
+            raise CollaborationAuthorizationError(
+                "execution lease is assigned to another policy controller"
+            )
         collaboration = self._require_collaboration(collaboration_id)
         normalized = validate_output("execute", output)
         expected_hash = collaboration.action_contract_hash
@@ -338,10 +391,11 @@ class IncidentCollaborationService:
                 raise CollaborationStateError(
                     f"autonomy mode {collaboration.autonomy_mode} does not permit execution"
                 )
-        item.status = "RUNNING"
-        item.assigned_agent = controller_id
-        item.attempt_count += 1
-        item.started_at = item.started_at or utcnow()
+        if item.status == "READY":
+            item.status = "RUNNING"
+            item.assigned_agent = controller_id
+            item.attempt_count += 1
+            item.started_at = item.started_at or utcnow()
         item.lease_expires_at = utcnow() + timedelta(minutes=5)
         collaboration.execution_json = deepcopy(normalized)
         return self._complete(
@@ -350,6 +404,122 @@ class IncidentCollaborationService:
             actor=controller_id,
             source_event_id=source_event_id,
         )
+
+    def claim_execution(
+        self,
+        collaboration_id: int,
+        *,
+        controller_id: str,
+        lease_seconds: int = 300,
+    ) -> AgentWorkItem:
+        item = self._require_work_item(collaboration_id, "execute", for_update=True)
+        if item.status != "READY":
+            raise CollaborationStateError(f"execution work is {item.status}, not READY")
+        now = utcnow()
+        item.status = "RUNNING"
+        item.assigned_agent = controller_id
+        item.attempt_count += 1
+        item.started_at = item.started_at or now
+        item.updated_at = now
+        item.lease_expires_at = now + timedelta(
+            seconds=min(max(lease_seconds, 30), 3600)
+        )
+        collaboration = self._require_collaboration(collaboration_id)
+        collaboration.status = "WAITING_EXECUTION"
+        collaboration.updated_at = now
+        self._append_event(
+            collaboration,
+            work_item=item,
+            actor=controller_id,
+            event_type="execution_claimed",
+            payload={
+                "autonomy_mode": collaboration.autonomy_mode,
+                "attempt": item.attempt_count,
+            },
+        )
+        return item
+
+    def renew_execution(
+        self,
+        collaboration_id: int,
+        *,
+        controller_id: str,
+        lease_seconds: int = 300,
+    ) -> AgentWorkItem:
+        item = self._require_work_item(collaboration_id, "execute", for_update=True)
+        if item.status != "RUNNING" or item.assigned_agent != controller_id:
+            raise CollaborationAuthorizationError(
+                "policy controller does not own the running execution lease"
+            )
+        now = utcnow()
+        item.lease_expires_at = now + timedelta(
+            seconds=min(max(lease_seconds, 30), 3600)
+        )
+        item.updated_at = now
+        return item
+
+    def adopt_expired_execution(
+        self,
+        collaboration_id: int,
+        *,
+        controller_id: str,
+        lease_seconds: int = 300,
+    ) -> AgentWorkItem:
+        item = self._require_work_item(collaboration_id, "execute", for_update=True)
+        now = utcnow()
+        if (
+            item.status != "RUNNING"
+            or item.lease_expires_at is None
+            or _as_utc(item.lease_expires_at) >= _as_utc(now)
+        ):
+            raise CollaborationStateError("execution lease is not expired")
+        previous_controller = item.assigned_agent
+        item.assigned_agent = controller_id
+        item.lease_expires_at = now + timedelta(
+            seconds=min(max(lease_seconds, 30), 3600)
+        )
+        item.updated_at = now
+        collaboration = self._require_collaboration(collaboration_id)
+        collaboration.updated_at = now
+        self._append_event(
+            collaboration,
+            work_item=item,
+            actor=controller_id,
+            event_type="execution_lease_recovered",
+            payload={
+                "previous_controller": previous_controller,
+                "automatic_retry": False,
+            },
+        )
+        return item
+
+    def block_execution(
+        self,
+        collaboration_id: int,
+        *,
+        controller_id: str,
+        reason: str,
+    ) -> AgentWorkItem:
+        item = self._require_work_item(collaboration_id, "execute", for_update=True)
+        if item.status != "RUNNING" or item.assigned_agent != controller_id:
+            raise CollaborationAuthorizationError(
+                "policy controller does not own the running execution lease"
+            )
+        item.status = "BLOCKED"
+        item.last_error = reason[:1000]
+        item.lease_expires_at = None
+        item.updated_at = utcnow()
+        collaboration = self._require_collaboration(collaboration_id)
+        collaboration.status = "NEEDS_OPERATOR"
+        collaboration.updated_at = utcnow()
+        self._append_event(
+            collaboration,
+            work_item=item,
+            actor=controller_id,
+            event_type="execution_policy_blocked",
+            payload={"reason": reason[:1000], "automatic_retry": False},
+        )
+        return item
 
     def verify_chain(self, collaboration_id: int) -> dict[str, Any]:
         events = self.events(collaboration_id)
@@ -589,6 +759,38 @@ class IncidentCollaborationService:
         if collaboration.evidence_gate_status != "PASSED":
             raise CollaborationStateError("remediation planning requires a passed evidence gate")
         action = output["action"]
+        context = collaboration.shared_context_json or {}
+        candidates = [
+            candidate
+            for candidate in context.get("action_candidates") or []
+            if isinstance(candidate, dict)
+        ]
+        if candidates:
+            proposal_id = action.get("proposal_id")
+            candidate = next(
+                (
+                    item
+                    for item in candidates
+                    if item.get("proposal_id") == proposal_id
+                ),
+                None,
+            )
+            if candidate is None:
+                raise CollaborationStateError(
+                    "action contract must bind one of the accepted dry-run proposals"
+                )
+            if action.get("tool_name") != candidate.get("tool_name"):
+                raise CollaborationStateError(
+                    "action contract tool differs from the bound dry-run proposal"
+                )
+            if action.get("arguments") != candidate.get("arguments"):
+                raise CollaborationStateError(
+                    "action contract arguments differ from the bound dry-run proposal"
+                )
+            if action.get("risk_level") != candidate.get("risk_level"):
+                raise CollaborationStateError(
+                    "action contract may not downgrade or change proposal risk"
+                )
         if action["reversible"] and not action["rollback_steps"]:
             raise CollaborationStateError("reversible action contract requires rollback steps")
         if action["risk_level"] in {"R2", "R3"} and not action["policy_authorization_ref"]:
@@ -711,6 +913,14 @@ def _normalized_refs(values: list[Any]) -> list[str]:
     )
 
 
+def _as_utc(value: datetime) -> datetime:
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
+
+
 def _autonomy_mode(action: dict[str, Any]) -> str:
     risk = action["risk_level"]
     environment = action["environment"]
@@ -718,8 +928,16 @@ def _autonomy_mode(action: dict[str, Any]) -> str:
         return "BLOCKED"
     if risk == "R0":
         return "OBSERVE_ONLY"
+    policy_ref = action.get("policy_authorization_ref")
+    policy_pre_authorized = (
+        isinstance(action.get("proposal_id"), int)
+        and not isinstance(action.get("proposal_id"), bool)
+        and isinstance(policy_ref, str)
+        and policy_ref in settings.collaboration_auto_policy_refs
+    )
     if (
-        action["reversible"]
+        policy_pre_authorized
+        and action["reversible"]
         and action["rollback_steps"]
         and action["canary"]
         and environment in {"LAB", "STAGING"}
@@ -727,7 +945,8 @@ def _autonomy_mode(action: dict[str, Any]) -> str:
     ):
         return "AUTO_REVERSIBLE"
     if (
-        environment == "PRODUCTION"
+        policy_pre_authorized
+        and environment == "PRODUCTION"
         and risk == "R1"
         and action["reversible"]
         and action["rollback_steps"]

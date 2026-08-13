@@ -70,8 +70,18 @@ class Settings:
     agentteams_matrix_url: str = os.getenv("AGENTTEAMS_MATRIX_URL", "").strip()
     agentteams_username: str = os.getenv("AGENTTEAMS_USERNAME", "").strip()
     agentteams_password: str = os.getenv("AGENTTEAMS_PASSWORD", "").strip()
-    agentteams_leader_room_id: str = os.getenv("AGENTTEAMS_LEADER_ROOM_ID", "").strip()
+    agentteams_team_room_id: str = os.getenv("AGENTTEAMS_TEAM_ROOM_ID", "").strip()
+    agentteams_leader_user_id: str = os.getenv("AGENTTEAMS_LEADER_USER_ID", "").strip()
     agentteams_callback_secret: str = os.getenv("AGENTTEAMS_CALLBACK_SECRET", "").strip()
+    collaboration_auto_policy_refs: tuple[str, ...] = _csv_env(
+        "OPSCOUNCIL_AUTO_POLICY_REFS"
+    )
+    policy_controller_idle_seconds: float = float(
+        os.getenv("OPSCOUNCIL_POLICY_CONTROLLER_IDLE_SECONDS", "0.5")
+    )
+    policy_controller_lease_seconds: int = int(
+        os.getenv("OPSCOUNCIL_POLICY_CONTROLLER_LEASE_SECONDS", "300")
+    )
 
 
 settings = Settings()

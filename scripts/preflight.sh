@@ -94,7 +94,16 @@ elif command -v psql >/dev/null 2>&1; then
 fi
 
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-  ok "node/npm found: $(node --version) / npm $(npm --version)"
+  node_version="$(node --version)"
+  node_major="${node_version#v}"
+  node_major="${node_major%%.*}"
+  if [[ "$node_major" =~ ^[0-9]+$ ]] && [ "$node_major" -ge 20 ]; then
+    ok "frontend build toolchain: $node_version / npm $(npm --version)"
+  elif [ -f frontend/dist/index.html ]; then
+    warn "node $node_version is below the supported build version 20; serving the verified bundled frontend"
+  else
+    fail "node $node_version is below the supported build version 20 and frontend/dist is absent"
+  fi
 elif [ -f frontend/dist/index.html ]; then
   warn "node/npm not found; the verified bundled frontend can still be served"
 else
