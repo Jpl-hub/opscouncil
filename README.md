@@ -77,8 +77,6 @@ flowchart LR
 - **事件中心**：接收巡检发现和外部事件，关联同一主机上的证据与历史任务。
 - **知识工作区**：导入运维规范和故障复盘，使用 PostgreSQL 全文检索与 pgvector 混合召回，回答保留来源引用。
 
-![安全校验与对抗评测](docs/assets/safety.png)
-
 ## 工程组成
 
 - FastAPI 控制平面与 Vue 3 前端
@@ -88,8 +86,6 @@ flowchart LR
 - systemd 服务、受限本地执行器、容器化 AgentTeams
 - R0-R4 风险模型、审批令牌、回滚与独立验证
 - 安全对抗、能力回归和靶场场景
-
-![不可变审计链回放](docs/assets/audit.png)
 
 ## 环境要求
 
