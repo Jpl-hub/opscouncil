@@ -23,7 +23,13 @@ class FakeModelClient:
     def __init__(self) -> None:
         self.messages: list[dict[str, str]] = []
 
-    def chat_json(self, messages: list[dict[str, str]], max_tokens: int = 900) -> dict:
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 900,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> dict:
         self.messages = messages
         return {
             "intent": "network_exposure_analysis",

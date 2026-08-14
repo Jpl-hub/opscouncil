@@ -519,7 +519,11 @@ export async function searchKnowledge(query: string, limit = 5): Promise<Knowled
 }
 
 export async function answerKnowledge(query: string, limit = 5): Promise<KnowledgeAnswer> {
-  const { data } = await client.post<KnowledgeAnswer>('/knowledge/answer', { query, limit })
+  const { data } = await client.post<KnowledgeAnswer>(
+    '/knowledge/answer',
+    { query, limit },
+    { timeout: 180_000 },
+  )
   return data
 }
 

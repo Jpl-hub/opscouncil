@@ -123,7 +123,12 @@ const scenarioTemplates = computed<ScenarioTemplate[]>(() =>
 onMounted(() => {
   window.addEventListener('popstate', syncViewFromLocation)
   window.addEventListener('hashchange', syncViewFromLocation)
-  void store.bootstrap().finally(scrollDialogueToBottom)
+  void store.bootstrap()
+    .then(async () => {
+      const taskId = readTaskIdFromLocation()
+      if (taskId) await store.openTaskById(taskId)
+    })
+    .finally(scrollDialogueToBottom)
   postureTimer = window.setInterval(() => {
     if (activeView.value !== 'posture' || store.postureRefreshing) return
     void store.refreshLivePosture()
@@ -292,6 +297,18 @@ const protectedBoundaryPreview = computed(() => {
 })
 const proposalStatus = computed(() => primaryProposal.value?.status ?? '')
 const proposalPending = computed(() => proposalStatus.value === 'PENDING_APPROVAL')
+const disposalGateText = computed(() => {
+  const status = disposalProposal.value?.status
+  if (status === 'PENDING_APPROVAL') return '等待审批'
+  if (status === 'EXECUTED') return '已执行'
+  if (status === 'REJECTED') return '已拒绝'
+  if (status === 'BLOCKED') return '已阻断'
+  if (status === 'NEEDS_OPERATOR') return '待人工核验'
+  return activeRisk.value
+})
+const disposalGateDetail = computed(() => (
+  disposalProposal.value?.status === 'EXECUTED' ? rollbackStatusText.value : runtimeStatusText.value
+))
 const actionExecutionEnabled = computed(() => Boolean(runtimeSafety.value?.executor.action_execution_enabled))
 const actionSafetyCaseReady = computed(() => primarySafetyCase.value?.status === 'READY')
 const actionApprovalEnabled = computed(() => actionExecutionEnabled.value && actionSafetyCaseReady.value)
@@ -1765,12 +1782,20 @@ function readViewFromLocation() {
   return view && validViews.has(view) ? view : 'workbench'
 }
 
+function readTaskIdFromLocation() {
+  const value = new URL(window.location.href).searchParams.get('task')
+  if (!value || !/^\d+$/.test(value)) return null
+  const taskId = Number(value)
+  return Number.isSafeInteger(taskId) && taskId > 0 ? taskId : null
+}
+
 function writeViewToLocation(view: string) {
   const url = new URL(window.location.href)
   if (view === 'workbench') {
     url.searchParams.delete('view')
   } else {
     url.searchParams.set('view', view)
+    url.searchParams.delete('task')
   }
   window.history.pushState({}, '', url)
 }
@@ -2425,10 +2450,10 @@ function formatEventMessage(message: string) {
 
         <nav class="tabs">
           <button class="tab" :class="{ active: activeCaseTab === 'request' }" @click="activeCaseTab = 'request'">自然语言请求</button>
-          <button class="tab" :class="{ active: activeCaseTab === 'plan' }" @click="activeCaseTab = 'plan'">Agent 计划</button>
-          <button class="tab" :class="{ active: activeCaseTab === 'process' }" @click="activeCaseTab = 'process'">执行过程</button>
-          <button class="tab" :class="{ active: activeCaseTab === 'graph' }" @click="activeCaseTab = 'graph'">证据图谱</button>
-          <button class="tab" :class="{ active: activeCaseTab === 'result' }" @click="activeCaseTab = 'result'">结果与报告</button>
+          <button class="tab" :class="{ active: activeCaseTab === 'plan' }" :disabled="!store.activeTask" @click="activeCaseTab = 'plan'">Agent 计划</button>
+          <button class="tab" :class="{ active: activeCaseTab === 'process' }" :disabled="!store.activeTask" @click="activeCaseTab = 'process'">执行过程</button>
+          <button class="tab" :class="{ active: activeCaseTab === 'graph' }" :disabled="!store.activeTask" @click="activeCaseTab = 'graph'">证据图谱</button>
+          <button class="tab" :class="{ active: activeCaseTab === 'result' }" :disabled="!store.activeTask" @click="activeCaseTab = 'result'">结果与报告</button>
         </nav>
 
         <section class="case-body">
@@ -2580,7 +2605,10 @@ function formatEventMessage(message: string) {
             </div>
           </article>
           <article v-else class="tab-detail" :class="{ 'graph-detail': activeCaseTab === 'graph' }">
-            <template v-if="activeCaseTab === 'plan'">
+            <div v-if="store.investigationLoading" class="tab-loading-state">
+              正在读取任务状态与持久化证据
+            </div>
+            <template v-else-if="activeCaseTab === 'plan'">
               <div class="detail-head">
                 <h2>Agent 执行计划</h2>
                 <span>来自当前任务状态机和审批方案</span>
@@ -2603,7 +2631,7 @@ function formatEventMessage(message: string) {
                 <h2>MCP 工具调用与执行轨迹</h2>
                 <span>工具调用 {{ store.toolCalls.length }} 次，审计事件 {{ store.events.length }} 条</span>
               </div>
-              <div class="module-table compact-table">
+              <div v-if="store.toolCalls.length" class="module-table compact-table">
                 <div class="data-row head tools-row">
                   <span>工具</span>
                   <span>版本</span>
@@ -2618,6 +2646,9 @@ function formatEventMessage(message: string) {
                   <span>{{ toolStatusLabel(call.status) }}</span>
                   <span>{{ call.duration_ms }}ms · {{ call.output.evidence_refs?.join('，') || '-' }}</span>
                 </div>
+              </div>
+              <div v-else class="empty-state tab-empty-state">
+                当前任务未调用 MCP 工具。若任务被安全策略拒绝或在意图阶段停止，系统不会生成执行轨迹。
               </div>
             </template>
             <template v-else-if="activeCaseTab === 'graph'">
@@ -4113,8 +4144,8 @@ function formatEventMessage(message: string) {
                 </button>
                 <button @click="inspectorSection = 'action'">
                   <span>处置门禁</span>
-                  <strong>{{ proposalPending ? '等待审批' : activeRisk }}</strong>
-                  <small>{{ runtimeStatusText }}</small>
+                  <strong>{{ disposalGateText }}</strong>
+                  <small>{{ disposalGateDetail }}</small>
                 </button>
                 <button @click="openEventSection('incidents')">
                   <span>关联事件</span>

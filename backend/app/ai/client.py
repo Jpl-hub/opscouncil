@@ -102,6 +102,8 @@ class BailianClient:
         self,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.chat_model,
@@ -111,6 +113,8 @@ class BailianClient:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if enable_thinking is not None:
+            payload["enable_thinking"] = enable_thinking
         stage, prompt_hash = self._metadata("chat", payload)
         started = time.monotonic()
         try:

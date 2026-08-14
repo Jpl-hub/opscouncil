@@ -167,13 +167,13 @@ watch(
   { immediate: true },
 )
 
-async function runKnowledgeSearch() {
-  await store.searchKnowledge(knowledgeQuery.value)
+function runKnowledgeSearch() {
+  void store.searchKnowledge(knowledgeQuery.value)
 }
 
-async function runSuggestedKnowledgeSearch(prompt: string) {
+function runSuggestedKnowledgeSearch(prompt: string) {
   knowledgeQuery.value = prompt
-  await runKnowledgeSearch()
+  void store.searchKnowledge(prompt)
 }
 
 function chooseFile() {
@@ -437,17 +437,16 @@ function shortHash(value: string) {
     </header>
 
     <section v-if="activeSection === 'qa'" class="knowledge-pane qa-pane">
-      <div class="qa-query">
+      <form class="qa-query" @submit.prevent="runKnowledgeSearch">
         <a-input
           v-model="knowledgeQuery"
           placeholder="询问运维规范或安全处置边界..."
-          @press-enter="runKnowledgeSearch"
         />
-        <a-button type="primary" :disabled="!knowledgeQuery.trim()" :loading="store.knowledgeSearching" @click="runKnowledgeSearch">
-          <template #icon><IconSearch /></template>
-          检索
-        </a-button>
-      </div>
+        <button class="qa-search-button" type="submit" :disabled="!knowledgeQuery.trim() || store.knowledgeSearching">
+          <IconSearch />
+          {{ store.knowledgeSearching ? '检索中' : '检索' }}
+        </button>
+      </form>
       <div class="qa-result-grid">
         <article class="qa-answer">
           <header>
@@ -1061,6 +1060,28 @@ function shortHash(value: string) {
 
 .qa-query {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.qa-search-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 88px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.qa-search-button:disabled {
+  border-color: #94a3b8;
+  background: #94a3b8;
+  cursor: not-allowed;
 }
 
 .qa-result-grid {

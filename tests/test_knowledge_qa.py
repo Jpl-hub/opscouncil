@@ -13,7 +13,13 @@ class FakeModelClient:
     def __init__(self) -> None:
         self.messages: list[dict[str, str]] = []
 
-    def chat_json(self, messages: list[dict[str, str]], max_tokens: int = 900) -> dict:
+    def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 900,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> dict:
         self.messages = messages
         return {
             "answer": "先确认文件类型、进程占用和服务归属。数据库事务日志不得自动删除，普通日志应走备份、压缩和截断。",

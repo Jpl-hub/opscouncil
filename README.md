@@ -1,30 +1,62 @@
 # OpsCouncil
 
-OpsCouncil 是面向 Linux 的证据约束型自主运维控制平面。它将运维请求或实时事件转化为可追踪的处置流程：采集主机证据、构建根因假设、生成有边界的操作方案、执行确定性策略校验、独立验证恢复结果，并记录完整决策链。
+**让运维 Agent 的每个结论有证据、每个动作有边界、每次恢复可验证。**
 
-大模型负责理解、规划与解释；确定性策略代码负责授权与执行。Agent 不能自行授予权限、扩大操作范围，也不能用自己的结论代替恢复验证。
+[![License](https://img.shields.io/badge/License-Apache--2.0-1f6feb.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10--3.13-3776ab.svg)](requirements/base.txt)
+[![FastAPI](https://img.shields.io/badge/FastAPI-control%20plane-009688.svg)](backend/app/main.py)
+[![Vue](https://img.shields.io/badge/Vue-3-42b883.svg)](frontend/package.json)
 
-## 核心能力
+OpsCouncil 是面向 Linux 生产节点的证据约束型自主运维控制平面。它把自然语言请求和实时事件转化为一条可追踪的处置链：现场感知、根因调查、动作规划、策略授权、受限执行、独立验证和经验沉淀。
 
-- **先取证，后处置**：诊断结论必须引用观测证据，并明确尚未满足的证据条件。
-- **有界自治**：只有命中明确策略、参数完全绑定且可回滚的动作，才允许自动执行；其余动作进入人工审批。
-- **独立验证**：恢复验证依据执行前基线、服务目标和真实回读结果完成，不采信规划 Agent 的自证。
-- **职责隔离**：AgentTeams 中的信号汇聚、根因调查、方案规划、恢复验证和事件指挥分别使用独立身份、Skill、MCP 工具面与回调凭证。
-- **防篡改审计**：任务、工具调用和协作事件形成哈希链；只有经过验证的处置结果才能进入长期运维记忆。
-- **真实主机感知**：从部署主机读取进程、端口、日志、磁盘、服务、配置完整性及已删除未释放文件等状态。
-- **多入口协同**：Web、命令行和飞书入口共用同一任务队列、安全策略和审计链。
+大模型负责理解、归纳和提出方案；独立的确定性策略控制器决定动作能否执行。Agent 不能自行授予权限、扩大操作范围，也不能用自己的结论代替恢复验证。
+
+![OpsCouncil 运维工作台](docs/assets/workbench.png)
+
+## 关键差异
+
+| 能力 | OpsCouncil 的实现 |
+| --- | --- |
+| 证据约束调查 | 结论引用实际 MCP 观测，缺失证据会被明确标记，不用推测补齐事实 |
+| 有界自治 | 动作契约绑定工具、参数、风险、前置条件、回滚和验证项，策略控制器二次校验 |
+| 职责隔离 | 事件指挥、信号汇聚、根因调查、方案规划和恢复验证使用独立身份与工具权限 |
+| 最小权限执行 | 只读调查默认运行；有副作用动作进入隔离执行与审批，R4 请求直接拒绝 |
+| 可验证恢复 | 执行后由独立角色回读系统状态，只有验证通过的结果才能进入长期记忆 |
+| 可复盘审计 | 任务、工具调用、审批、协作和验证事件形成哈希链，可按阶段重放 |
+
+## 一条真实闭环
+
+```text
+自然语言 / 告警
+    -> 持久化任务队列
+    -> 只读 MCP 取证
+    -> 多角色根因调查
+    -> 精确动作契约
+    -> 确定性策略校验
+    -> 人工审批或受限执行
+    -> 独立恢复验证
+    -> 哈希审计与运维记忆
+```
+
+本地验收记录覆盖三类代表性路径：
+
+- **只读调查**：网络暴露面任务调用 4 项真实主机工具，形成 18 个审计事件后封存。
+- **受控处置**：12 MiB 日志经审批后由受限账户备份并轮转，独立验证回读成功，审计链包含 22 个事件。
+- **恶意请求**：提示词注入与 `rm -rf /` 请求命中 3 条禁止规则，工具调用数为 0，系统未发生变更。
+
+![多角色协同调查](docs/assets/collaboration.png)
 
 ## 系统架构
 
 ```mermaid
 flowchart LR
     O["运维人员 / 飞书 / CLI"] --> A["FastAPI 控制平面"]
-    A --> Q["持久化任务队列"]
+    A --> Q["PostgreSQL 持久化任务队列"]
     Q --> W["受限任务执行器"]
-    W --> M["MCP 工具注册表"]
+    W --> M["27 项 MCP 工具契约"]
     M --> H["Linux 主机"]
     W --> G["确定性策略控制器"]
-    G --> X["最小权限执行器"]
+    G --> X["最小权限执行代理"]
     W --> E["证据与审计服务"]
     E --> P[("PostgreSQL + pgvector")]
     A <--> T["AgentTeams 响应团队"]
@@ -35,19 +67,29 @@ flowchart LR
     T --> V["恢复验证"]
 ```
 
-策略控制器独立于模型团队运行。每一项可执行方案都绑定提案编号、工具、参数、风险等级、策略版本与内容哈希，执行后由不同角色回读验证。
+五个角色通过版本化上下文、工作项租约和结构化交付物协作。策略控制器位于模型团队之外；每项可执行方案都绑定提案编号、工具、参数、风险等级、策略版本和内容哈希。
 
-## 处置流程
+## 运维入口
 
-1. 规范化请求，识别提示词注入和禁止意图。
-2. 保存与任务绑定的平台能力快照。
-3. 通过只读、语义化 MCP 工具采集现场证据。
-4. 在固定迭代次数、工具调用次数和时间预算内构建根因假设。
-5. 编译包含目标、前置条件、影响范围、回滚与验证项的动作契约。
-6. 确定性策略引擎重新校验已绑定的完整动作。
-7. 命中自治策略的动作由受限账户执行，其他动作等待运维人员审批。
-8. 独立验证恢复状态，并将结果追加到哈希审计链。
-9. 仅将证据充分、结果已验证的经验写入长期运维记忆。
+- **Web 工作台**：任务会话、执行计划、MCP 调用、证据图谱、审批和恢复验证集中呈现。
+- **飞书协同**：消息进入同一任务队列，审批、进度和结果回传使用同一安全边界。
+- **CLI**：适合诊断、批量提交、审批队列查询和审计导出。
+- **事件中心**：接收巡检发现和外部事件，关联同一主机上的证据与历史任务。
+- **知识工作区**：导入运维规范和故障复盘，使用 PostgreSQL 全文检索与 pgvector 混合召回，回答保留来源引用。
+
+![安全校验与对抗评测](docs/assets/safety.png)
+
+## 工程组成
+
+- FastAPI 控制平面与 Vue 3 前端
+- PostgreSQL 持久化状态、任务租约、审计事件和运维记忆
+- pgvector 语义索引与 PostgreSQL 全文检索
+- 5 个 Agent Identity、6 类 Skill、27 项 MCP 工具契约
+- systemd 服务、受限本地执行器、容器化 AgentTeams
+- R0-R4 风险模型、审批令牌、回滚与独立验证
+- 安全对抗、能力回归和靶场场景
+
+![不可变审计链回放](docs/assets/audit.png)
 
 ## 环境要求
 
@@ -55,7 +97,7 @@ flowchart LR
 - Python 3.10-3.13
 - PostgreSQL 及 `vector` 扩展
 - Node.js 20 及以上版本（仅用于重新构建 Vue 前端）
-- 完整主机集成需要 `systemd`、`journalctl`、`ss`、`ps` 和 `curl`
+- 完整主机感知需要 `systemd`、`journalctl`、`ss`、`ps` 和 `curl`
 - 启用 AgentTeams 时需要 Docker 或 Podman
 
 ## 快速开始
@@ -81,11 +123,9 @@ export OPSCOUNCIL_DB_PASSWORD='请替换为高强度部署密码'
 .venv/bin/python scripts/worker.py
 ```
 
-随后访问 `http://127.0.0.1:8000`。生产环境安装、systemd 服务与权限加固见[Linux 部署文档](docs/deployment/linux.md)。
+访问 `http://127.0.0.1:8000`。生产安装、systemd 服务和权限加固见 [Linux 部署文档](docs/deployment/linux.md)。
 
 ## 命令行
-
-`opscouncilctl` 与 Web 界面使用同一条受控任务链：
 
 ```bash
 python scripts/opscouncilctl.py doctor --strict
@@ -93,18 +133,6 @@ python scripts/opscouncilctl.py ask 检查当前主机的监听端口和暴露�
 python scripts/opscouncilctl.py approvals --status PENDING_APPROVAL
 python scripts/opscouncilctl.py audit TRACE_ID
 ```
-
-## AgentTeams
-
-OpsCouncil 适配 AgentTeams 1.2 及以上版本。按照 AgentTeams 官方方式完成安装，确认 `agentteams-manager` 正常运行，并确保 Worker 容器可访问 OpsCouncil API。
-
-```bash
-export OPSCOUNCIL_API_URL=http://host.containers.internal:8000
-export AGENTTEAMS_CALLBACK_SECRET='请生成独立的高强度随机值'
-python -m agentteams.scripts.deploy_team
-```
-
-部署命令默认拒绝覆盖已有团队。只有在需要原子更新五个 Worker 的身份、Skill 与 MCP 凭证时，才显式使用 `--replace`。
 
 ## 验证
 
@@ -119,8 +147,8 @@ OPSCOUNCIL_REQUIRE_WORKER=true \
 
 ## 安全说明
 
-不要提交 `.env`、飞书凭证、模型 API Key、生成后的 AgentTeams 包或运行时数据库。安全问题请通过 [SECURITY.md](SECURITY.md) 中的非公开渠道反馈。
+不要提交 `.env`、飞书凭证、模型 API Key、生成后的 AgentTeams 包、运行数据库或证据产物。安全问题请通过 [SECURITY.md](SECURITY.md) 中的非公开渠道反馈。
 
 ## 开源许可
 
-本项目采用 Apache License 2.0，详见 [LICENSE](LICENSE)。
+本项目采用 [Apache License 2.0](LICENSE)。欢迎通过 Issue 和 Pull Request 参与工具、Skill、部署适配与评测场景建设。

@@ -70,6 +70,25 @@ const evidenceRefs = computed(() => {
 })
 const teamOnline = computed(() => Boolean(agentTeamsStatus.value?.configured && agentTeamsStatus.value?.reachable))
 
+function preferredCollaboration(rows: IncidentCollaborationSummary[]) {
+  const priority = [
+    'NEEDS_OPERATOR',
+    'WAITING_EXECUTION',
+    'VERIFYING',
+    'INVESTIGATING',
+    'PLANNING',
+    'RESOLVED',
+    'TRIAGING',
+    'LEARNING',
+    'FAILED',
+  ]
+  for (const status of priority) {
+    const match = rows.find((item) => item.status === status)
+    if (match) return match.id
+  }
+  return rows[0]?.id ?? null
+}
+
 onMounted(() => {
   void refreshAll()
 })
@@ -92,8 +111,7 @@ async function refreshAll() {
 
     const requested = selectedId.value
     const next = collaborationRows.find((item) => item.id === requested)?.id
-      ?? collaborationRows[0]?.id
-      ?? null
+      ?? preferredCollaboration(collaborationRows)
     selectedId.value = next
     selectedIncidentId.value = availableIncidents.value[0]?.id
     if (next !== null) await loadDetail(next)

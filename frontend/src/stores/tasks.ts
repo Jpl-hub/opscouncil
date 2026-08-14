@@ -227,6 +227,14 @@ function isTerminalTask(task: Task) {
   return terminalTaskStatuses.has(task.status)
 }
 
+function preferredInitialTask(tasks: Task[]) {
+  return tasks.find((task) => !isTerminalTask(task))
+    ?? tasks.find((task) => task.status === 'NEEDS_OPERATOR')
+    ?? tasks.find((task) => task.status === 'SEALED' || task.status === 'ROLLED_BACK')
+    ?? tasks.find((task) => task.status === 'REJECTED' || task.status === 'BLOCKED')
+    ?? tasks[0]
+}
+
 export const useTaskStore = defineStore('tasks', {
   state: (): TaskState => ({
     tasks: [],
@@ -412,7 +420,8 @@ export const useTaskStore = defineStore('tasks', {
         this.feishuIdentities = feishuIdentities
         this.feishuPendingIdentities = feishuPendingIdentities
         if (!activeTask && this.tasks.length > 0) {
-          await this.selectTask(this.tasks[0])
+          const initialTask = preferredInitialTask(this.tasks)
+          if (initialTask) await this.selectTask(initialTask)
         }
       } catch (error) {
         this.error = error instanceof Error ? error.message : '加载任务失败'

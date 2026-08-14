@@ -14,6 +14,28 @@ def build_mock_client(handler) -> BailianClient:  # type: ignore[no-untyped-def]
     return client
 
 
+def test_chat_json_forwards_explicit_thinking_and_output_budget() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"answer":"ok"}'}, "finish_reason": "stop"}]},
+        )
+
+    client = build_mock_client(handler)
+    result = client.chat_json(
+        [{"role": "user", "content": "简洁回答"}],
+        max_tokens=700,
+        enable_thinking=False,
+    )
+
+    assert result == {"answer": "ok"}
+    assert captured["max_tokens"] == 700
+    assert captured["enable_thinking"] is False
+
+
 def test_rerank_uses_qwen_compatible_contract_and_validates_results() -> None:
     captured: dict[str, object] = {}
 

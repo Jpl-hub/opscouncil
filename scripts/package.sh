@@ -15,6 +15,7 @@ package_entries=(
   "backend"
   "config/feishu.env.example"
   "deploy/systemd"
+  "docs/assets"
   "docs/deployment/linux.md"
   "frontend/dist"
   "migrations"

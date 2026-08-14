@@ -136,7 +136,11 @@ class IntentResolver:
         messages = self._build_messages(user_input, conversation_context or [])
         prompt_hash = _sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True))
         with model_invocation_scope(self.model_client, "intent", prompt_hash):
-            raw_result = self.model_client.chat_json(messages)
+            raw_result = self.model_client.chat_json(
+                messages,
+                max_tokens=800,
+                enable_thinking=False,
+            )
         decision = IntentDecision.model_validate(raw_result)
         decision = bind_explicit_operational_object(user_input, decision)
         return ResolvedIntent(

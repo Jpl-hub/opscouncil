@@ -99,7 +99,11 @@ class KnowledgeQAService:
             },
         ]
         with model_invocation_scope(self.model_client, "knowledge_answer"):
-            raw_answer = self.model_client.chat_json(messages)
+            raw_answer = self.model_client.chat_json(
+                messages,
+                max_tokens=700,
+                enable_thinking=False,
+            )
         draft = KnowledgeAnswerDraft.model_validate(raw_answer)
         hit_by_id = {hit.chunk_id: hit for hit in hits}
         citations = [hit_by_id[chunk_id] for chunk_id in draft.cited_chunk_ids if chunk_id in hit_by_id]
