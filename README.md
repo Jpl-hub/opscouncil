@@ -13,6 +13,12 @@ OpsCouncil 是面向 Linux 生产节点的证据约束型自主运维控制平�
 
 ![OpsCouncil 运维工作台](docs/assets/workbench.png)
 
+## 演示视频
+
+[![OpsCouncil 功能演示](docs/assets/demo.png)](https://www.bilibili.com/video/BV1N7gK6HE1i/)
+
+点击画面观看完整演示。
+
 ## 关键差异
 
 | 能力 | OpsCouncil 的实现 |
@@ -119,7 +125,7 @@ export OPSCOUNCIL_DB_PASSWORD='请替换为高强度部署密码'
 .venv/bin/python scripts/worker.py
 ```
 
-访问 `http://127.0.0.1:8000`。生产安装、systemd 服务和权限加固见 [Linux 部署文档](docs/deployment/linux.md)。
+生产安装、systemd 服务和权限加固见 [Linux 部署文档](docs/deployment/linux.md)。
 
 ## 命令行
 
@@ -140,10 +146,6 @@ OPSCOUNCIL_REQUIRE_MODEL=true \
 OPSCOUNCIL_REQUIRE_WORKER=true \
 ./scripts/smoke_check.sh
 ```
-
-## 安全说明
-
-不要提交 `.env`、飞书凭证、模型 API Key、生成后的 AgentTeams 包、运行数据库或证据产物。安全问题请通过 [SECURITY.md](SECURITY.md) 中的非公开渠道反馈。
 
 ## 开源许可
 
