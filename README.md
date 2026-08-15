@@ -15,9 +15,11 @@ OpsCouncil 是面向 Linux 生产节点的证据约束型自主运维控制平�
 
 ## 演示视频
 
-[![OpsCouncil 功能演示](docs/assets/demo.png)](https://www.bilibili.com/video/BV1N7gK6HE1i/)
+[![哔哩哔哩：观看 OpsCouncil 完整演示](https://img.shields.io/badge/bilibili-%E8%A7%82%E7%9C%8B%E5%AE%8C%E6%95%B4%E6%BC%94%E7%A4%BA-00AEEC?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1Dtb16QEiH)
 
-点击画面观看完整演示。
+[![OpsCouncil 功能演示视频封面](docs/assets/demo-bilibili.jpg)](https://www.bilibili.com/video/BV1Dtb16QEiH)
+
+**哔哩哔哩 · 3 分 16 秒**：完整展示多 Agent 协作、证据调查、安全审批、受限执行与独立验证。点击封面即可播放。
 
 ## 关键差异
 
